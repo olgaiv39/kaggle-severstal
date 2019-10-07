@@ -1,11 +1,9 @@
 # https://github.com/junfu1115/DANet
-
-from common import *
-from dataset import *
-from efficientnet import *
-
-# overwrite ...
-from dataset import null_collate as null_collate0
+import torch
+from .dataset import *
+from .efficientnet import *
+# Overwrite null_collate
+from .dataset import null_collate as null_collate0
 
 
 def null_collate(batch):
@@ -14,67 +12,55 @@ def null_collate(batch):
         arange = torch.FloatTensor([1, 2, 3, 4]).to(truth_mask.device).view(1, 4, 1, 1).long()
         truth_attention = truth_mask.repeat(1, 4, 1, 1)
         truth_attention = (truth_attention == arange).float()
-        truth_attention = F.avg_pool2d(truth_attention, kernel_size=(32, 32), stride=(32, 32))
+        truth_attention = torch.nn.functional.avg_pool2d(truth_attention, kernel_size=(32, 32), stride=(32, 32))
         truth_attention = (truth_attention > 0 / (32 * 32)).float()
-
     return input, truth_label, truth_mask, truth_attention, infor
 
 
-####################################################################################################
-
-class ConvGnUp2d(nn.Module):
+class ConvGnUp2d(torch.nn.Module):
     def __init__(self, in_channel, out_channel, num_group=32, kernel_size=3, padding=1, stride=1):
         super(ConvGnUp2d, self).__init__()
-        self.conv = nn.Conv2d(in_channel, out_channel, kernel_size=kernel_size, padding=padding, stride=stride,
-                              bias=False)
-        self.gn = nn.GroupNorm(num_group, out_channel)
+        self.conv = torch.nn.Conv2d(in_channel, out_channel, kernel_size=kernel_size, padding=padding, stride=stride,                              bias=False)
+        self.gn = torch.nn.GroupNorm(num_group, out_channel)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.gn(x)
-        x = F.relu(x, inplace=True)
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+        x = torch.nn.functional.relu(x, inplace=True)
+        x = torch.nn.functional.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
         return x
 
 
 def upsize_add(x, lateral):
-    return F.interpolate(x, size=lateral.shape[2:], mode='nearest') + lateral
+    return torch.nn.functional.interpolate(x, size=lateral.shape[2:], mode='nearest') + lateral
 
 
 def upsize(x, scale_factor=2):
-    x = F.interpolate(x, scale_factor=scale_factor, mode='nearest')
+    x = torch.nn.functional.interpolate(x, scale_factor=scale_factor, mode='nearest')
     return x
 
 
 '''
 model.py: calling main function ... 
-
-
 stem   torch.Size([10, 48, 128, 128])
 block1 torch.Size([10, 24, 128, 128])
-
 block2 torch.Size([10, 40, 64, 64])
-
 block3 torch.Size([10, 64, 32, 32])
-
 block4 torch.Size([10, 128, 16, 16])
 block5 torch.Size([10, 176, 16, 16])
-
 block6 torch.Size([10, 304, 8, 8])
 block7 torch.Size([10, 512, 8, 8])
 last   torch.Size([10, 2048, 8, 8])
-
 sucess!
 '''
 
 
-class Net(nn.Module):
+class Net(torch.nn.Module):
     def load_pretrain(self, skip=['logit.'], is_print=True):
         load_pretrain(self, skip, pretrain_file=PRETRAIN_FILE, conversion=CONVERSION, is_print=is_print)
 
     def __init__(self, num_class=4, drop_connect_rate=0.2):
         super(Net, self).__init__()
-
         e = EfficientNetB5(drop_connect_rate)
         self.stem = e.stem
         self.block1 = e.block1
@@ -85,36 +71,33 @@ class Net(nn.Module):
         self.block6 = e.block6
         self.block7 = e.block7
         self.last = e.last
-        e = None  # dropped
-
-        # ---
-        self.lateral0 = nn.Conv2d(2048, 64, kernel_size=1, padding=0, stride=1)
-        self.lateral1 = nn.Conv2d(176, 64, kernel_size=1, padding=0, stride=1)
-        self.lateral2 = nn.Conv2d(64, 64, kernel_size=1, padding=0, stride=1)
-        self.lateral3 = nn.Conv2d(40, 64, kernel_size=1, padding=0, stride=1)
-
-        self.top1 = nn.Sequential(
+        # Dropped
+        e = None
+        self.lateral0 = torch.nn.Conv2d(2048, 64, kernel_size=1, padding=0, stride=1)
+        self.lateral1 = torch.nn.Conv2d(176, 64, kernel_size=1, padding=0, stride=1)
+        self.lateral2 = torch.nn.Conv2d(64, 64, kernel_size=1, padding=0, stride=1)
+        self.lateral3 = torch.nn.Conv2d(40, 64, kernel_size=1, padding=0, stride=1)
+        self.top1 = torch.nn.Sequential(
             ConvGnUp2d(64, 64),
             ConvGnUp2d(64, 64),
             ConvGnUp2d(64, 64),
         )
-        self.top2 = nn.Sequential(
+        self.top2 = torch.nn.Sequential(
             ConvGnUp2d(64, 64),
             ConvGnUp2d(64, 64),
         )
-        self.top3 = nn.Sequential(
+        self.top3 = torch.nn.Sequential(
             ConvGnUp2d(64, 64),
         )
-        self.top4 = nn.Sequential(
-            nn.Conv2d(64 * 3, 64, kernel_size=3, stride=1, padding=1, bias=False),
+        self.top4 = torch.nn.Sequential(
+            torch.nn.Conv2d(64 * 3, 64, kernel_size=3, stride=1, padding=1, bias=False),
             BatchNorm2d(64),
-            nn.ReLU(inplace=True),
+            torch.nn.ReLU(inplace=True),
         )
-        self.logit_mask = nn.Conv2d(64, num_class + 1, kernel_size=1)
+        self.logit_mask = torch.nn.Conv2d(64, num_class + 1, kernel_size=1)
 
     def forward(self, x):
         batch_size, C, H, W = x.shape
-
         x = self.stem(x)  # ; print('stem  ',x.shape)
         x = self.block1(x);
         x0 = x  # ; print('block1',x.shape)
@@ -129,43 +112,31 @@ class Net(nn.Module):
         x = self.block7(x)  # ; print('block7',x.shape)
         x = self.last(x);
         x4 = x  # ; print('last  ',x.shape)
-
-        # segment
+        # Segment
         t0 = self.lateral0(x4)
         t1 = upsize_add(t0, self.lateral1(x3))  # 16x16
         t2 = upsize_add(t1, self.lateral2(x2))  # 32x32
         t3 = upsize_add(t2, self.lateral3(x1))  # 64x64
-
         t1 = self.top1(t1)  # 128x128
         t2 = self.top2(t2)  # 128x128
         t3 = self.top3(t3)  # 128x128
-
         t = torch.cat([t1, t2, t3], 1)
         t = self.top4(t)
         logit_mask = self.logit_mask(t)
-        logit_mask = F.interpolate(logit_mask, scale_factor=2.0, mode='bilinear', align_corners=False)
-
+        logit_mask = torch.nn.functional.interpolate(logit_mask, scale_factor=2.0, mode='bilinear', align_corners=False)
         return logit_mask
 
-
-#########################################################################
 
 # use topk
 # def criterion_label(logit, truth, weight=None):
 #     batch_size,num_class,H,W = logit.shape
 #     K=5
-#
 #     logit = logit.view(batch_size,num_class,-1)
 #     value, index = logit.topk(K)
-#
 #     logit_k = torch.gather(logit,dim=2,index=index)
 #     truth_k = truth.view(batch_size,num_class,1).repeat(1,1,5)
-#
-#
 #     if weight is None: weight=[1,1,1,1]
 #     weight = torch.FloatTensor(weight).to(truth.device).view(1,-1,1)
-#
-#
 #     loss = F.binary_cross_entropy_with_logits(logit_k, truth_k, reduction='none')
 #     #https://arxiv.org/pdf/1909.07829.pdf
 #     if 1:
@@ -173,7 +144,6 @@ class Net(nn.Module):
 #         p = torch.sigmoid(logit_k)
 #         focal = (truth_k*(1-p) + (1-truth_k)*(p))**gamma
 #         weight = weight*focal /focal.sum().item()
-#
 #     loss = loss*weight
 #     loss = loss.mean()
 #     return loss
@@ -197,20 +167,15 @@ class Net(nn.Module):
 # https://discuss.pytorch.org/t/numerical-stability-of-bcewithlogitsloss/8246
 def criterion_attention(logit, truth, weight=None):
     batch_size, num_class, H, W = logit.shape
-
     if weight is None: weight = [1, 1, 1, 1]
     weight = torch.FloatTensor(weight).to(truth.device).view(1, -1, 1, 1)
-
-    loss = F.binary_cross_entropy_with_logits(logit, truth, reduction='none')
-
-    # ---
+    loss = torch.nn.functional.binary_cross_entropy_with_logits(logit, truth, reduction='none')
     # https://arxiv.org/pdf/1909.07829.pdf
     if 0:
         gamma = 2.0
         p = torch.sigmoid(logit)
         focal = (truth * (1 - p) + (1 - truth) * (p)) ** gamma
         weight = weight * focal / focal.sum().item() * H * W
-    # ---
     loss = loss * weight
     loss = loss.mean()
     return loss
