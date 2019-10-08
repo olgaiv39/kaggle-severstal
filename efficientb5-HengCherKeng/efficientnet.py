@@ -1,27 +1,13 @@
-from common import *
+import os
 from lib.net.sync_bn.nn import BatchNorm2dSync as SynchronizedBatchNorm2d
 
-
-###############################################################################
-
-BatchNorm2d = SynchronizedBatchNorm2d
-#BatchNorm2d = nn.BatchNorm2d
-
-###############################################################################
-
+BatchNorm2d = SynchronizedBatchNorm2d  # Or we can use torch.nn.BatchNorm2d
 # https://colab.research.google.com/github/rwightman/pytorch-image-models/blob/master/notebooks/EffResNetComparison.ipynb#scrollTo=MjM-eMtSalDS
 # https://www.kaggle.com/hmendonca/efficientnet-pytorch
-
-
-
-
 IMAGE_RGB_MEAN = [0.485, 0.456, 0.406]
-IMAGE_RGB_STD  = [0.229, 0.224, 0.225]
-
+IMAGE_RGB_STD = [0.229, 0.224, 0.225]
 IS_PYTORCH_PAD = True  # True  # False
 IS_GATHER_EXCITE = False
-
-
 CONVERSION = [
  'stem.0.conv.weight',	(64, 3, 3, 3),	 '_conv_stem.weight',	(48, 3, 3, 3),
  'stem.0.bn.weight',	(64,),	 '_bn0.weight',	(48,),
@@ -761,215 +747,386 @@ CONVERSION = [
  'last.0.bn.running_var',	(2560,),	 '_bn1.running_var',	(2048,),
  'logit.weight',	(1000, 2560),	 '_fc.weight',	(1000, 2048),
  'logit.bias',	(1000,),	 '_fc.bias',	(1000,),
-
-
-
 ]
-PRETRAIN_FILE = '/root/share/project/kaggle/2019/chest/data/__download__/lukemelas/efficientnet-b5-b6417697.pth'
-def load_pretrain(net, skip=[], pretrain_file=PRETRAIN_FILE, conversion=CONVERSION, is_print=True):
+# TODO: Download pretrain file
+PRETRAIN_FILE = "/root/share/project/kaggle/2019/chest/data/__download__/lukemelas/efficientnet-b5-b6417697.pth"
 
-    #raise NotImplementedError
-    print('\tload pretrain_file: %s'%pretrain_file)
 
-    #pretrain_state_dict = torch.load(pretrain_file)
-    pretrain_state_dict = torch.load(pretrain_file, map_location=lambda storage, loc: storage)
+def load_pretrain(
+    net, skip=[], pretrain_file=PRETRAIN_FILE, conversion=CONVERSION, is_print=True
+):
+    print("\tLoad pretrain_file: %s" % pretrain_file)
+    pretrain_state_dict = torch.load(
+        pretrain_file, map_location=lambda storage, loc: storage
+    )
     state_dict = net.state_dict()
-
     i = 0
-    conversion = np.array(CONVERSION).reshape(-1,4)
-    for key,_,pretrain_key,_ in conversion:
-        if any(s in key for s in
-            ['.num_batches_tracked',]+skip):
+    conversion = numpy.array(CONVERSION).reshape(-1, 4)
+    for key, _, pretrain_key, _ in conversion:
+        if any(s in key for s in [".num_batches_tracked"] + skip):
             continue
-
-        #print('\t\t',key)
         if is_print:
-            print('\t\t','%-48s  %-24s  <---  %-32s  %-24s'%(
-                key, str(state_dict[key].shape),
-                pretrain_key, str(pretrain_state_dict[pretrain_key].shape),
-            ))
-        i = i+1
-
+            print(
+                "\t\t",
+                "%-48s  %-24s  <---  %-32s  %-24s"
+                % (
+                    key,
+                    str(state_dict[key].shape),
+                    pretrain_key,
+                    str(pretrain_state_dict[pretrain_key].shape),
+                ),
+            )
+        i = i + 1
         state_dict[key] = pretrain_state_dict[pretrain_key]
-
     net.load_state_dict(state_dict)
-    print('')
-    print('len(pretrain_state_dict.keys()) = %d'%len(pretrain_state_dict.keys()))
-    print('len(state_dict.keys())          = %d'%len(state_dict.keys()))
-    print('loaded    = %d'%i)
-    print('')
+    print("")
+    print("len(pretrain_state_dict.keys()) = %d" % len(pretrain_state_dict.keys()))
+    print("len(state_dict.keys())          = %d" % len(state_dict.keys()))
+    print("loaded    = %d" % i)
+    print("")
 
-
-### efficientnet #######################################################################
 
 def drop_connect(x, probability, training):
-    if not training: return x
-
+    if not training:
+        return x
     batch_size = len(x)
     keep_probability = 1 - probability
     noise = keep_probability
     noise += torch.rand([batch_size, 1, 1, 1], dtype=x.dtype, device=x.device)
     mask = torch.floor(noise)
     x = x / keep_probability * mask
-
     return x
 
-class Swish(nn.Module):
+
+class Swish(torch.nn.Module):
     def forward(self, x):
         return x * torch.sigmoid(x)
 
-class Identity(nn.Module):
+
+class Identity(torch.nn.Module):
     def forward(self, x):
         return x
 
-class Flatten(nn.Module):
-    def forward(self, x):
-        return x.view(len(x),-1)
 
-class Conv2dBn(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel_size=1, stride=1, zero_pad=[0,0,0,0], group=1):
+class Flatten(torch.nn.Module):
+    def forward(self, x):
+        return x.view(len(x), -1)
+
+
+class Conv2dBn(torch.nn.Module):
+    def __init__(
+        self,
+        in_channel,
+        out_channel,
+        kernel_size=1,
+        stride=1,
+        zero_pad=[0, 0, 0, 0],
+        group=1,
+    ):
         super(Conv2dBn, self).__init__()
-        if IS_PYTORCH_PAD: zero_pad = [kernel_size//2]*4
-        self.pad  = nn.ZeroPad2d(zero_pad)
-        self.conv = nn.Conv2d(in_channel, out_channel, kernel_size=kernel_size, padding=0, stride=stride, groups=group, bias=False)
-        self.bn   = BatchNorm2d(out_channel, eps=1e-03, momentum=0.01)
-        #print(zero_pad)
+        if IS_PYTORCH_PAD:
+            zero_pad = [kernel_size // 2] * 4
+        self.pad = torch.nn.ZeroPad2d(zero_pad)
+        self.conv = torch.nn.Conv2d(
+            in_channel,
+            out_channel,
+            kernel_size=kernel_size,
+            padding=0,
+            stride=stride,
+            groups=group,
+            bias=False,
+        )
+        self.bn = BatchNorm2d(out_channel, eps=1e-03, momentum=0.01)
 
     def forward(self, x):
-        x = self.pad (x)
+        x = self.pad(x)
         x = self.conv(x)
-        x = self.bn  (x)
+        x = self.bn(x)
         return x
 
 
-class SqueezeExcite(nn.Module):
+class SqueezeExcite(torch.nn.Module):
     def __init__(self, in_channel, reduction_channel, excite_size):
         super(SqueezeExcite, self).__init__()
-        self.excite_size=excite_size
-
-        self.squeeze = nn.Conv2d(in_channel, reduction_channel, kernel_size=1, padding=0)
-        self.excite  = nn.Conv2d(reduction_channel, in_channel, kernel_size=1, padding=0)
+        self.excite_size = excite_size
+        self.squeeze = torch.nn.Conv2d(
+            in_channel, reduction_channel, kernel_size=1, padding=0
+        )
+        self.excite = torch.nn.Conv2d(
+            reduction_channel, in_channel, kernel_size=1, padding=0
+        )
         self.act = Swish()
 
-    # def forward(self, x):
-    #     s = F.adaptive_avg_pool2d(x,1)
-    #     s = self.act(self.squeeze(s))
-    #     s = torch.sigmoid(self.excite(s))
-    #
-    #     x = s*x
-    #     return x
-
-
     def forward(self, x):
-
         if IS_GATHER_EXCITE:
-            s = F.avg_pool2d(x, kernel_size=self.excite_size)
+            s = torch.nn.functional.avg_pool2d(x, kernel_size=self.excite_size)
         else:
-            s = F.adaptive_avg_pool2d(x,1)
-
+            s = torch.nn.functional.adaptive_avg_pool2d(x, 1)
         s = self.act(self.squeeze(s))
         s = torch.sigmoid(self.excite(s))
 
         if IS_GATHER_EXCITE:
-            s = F.interpolate(s, size=(x.shape[2],x.shape[3]), mode='nearest')
+            s = torch.nn.functional.interpolate(
+                s, size=(x.shape[2], x.shape[3]), mode="nearest"
+            )
 
-        x = s*x
+        x = s * x
         return x
 
-#---
 
-class EfficientBlock(nn.Module):
-
-    def __init__(self, in_channel, channel, out_channel, kernel_size, stride, zero_pad, excite_size, drop_connect_rate):
+class EfficientBlock(torch.nn.Module):
+    def __init__(
+        self,
+        in_channel,
+        channel,
+        out_channel,
+        kernel_size,
+        stride,
+        zero_pad,
+        excite_size,
+        drop_connect_rate,
+    ):
         super().__init__()
         self.is_shortcut = stride == 1 and in_channel == out_channel
         self.drop_connect_rate = drop_connect_rate
-
         if in_channel == channel:
-            self.bottleneck = nn.Sequential(
-                Conv2dBn(   channel, channel, kernel_size=kernel_size, stride=stride, zero_pad=zero_pad, group=channel),
+            self.bottleneck = torch.nn.Sequential(
+                Conv2dBn(
+                    channel,
+                    channel,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    zero_pad=zero_pad,
+                    group=channel,
+                ),
                 Swish(),
-                SqueezeExcite(channel, in_channel//4, excite_size) if excite_size>0
+                SqueezeExcite(channel, in_channel // 4, excite_size)
+                if excite_size > 0
                 else Identity(),
                 Conv2dBn(channel, out_channel, kernel_size=1, stride=1),
             )
         else:
-            self.bottleneck = nn.Sequential(
+            self.bottleneck = torch.nn.Sequential(
                 Conv2dBn(in_channel, channel, kernel_size=1, stride=1),
                 Swish(),
-                Conv2dBn(   channel, channel, kernel_size=kernel_size, stride=stride, zero_pad=zero_pad, group=channel),
+                Conv2dBn(
+                    channel,
+                    channel,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    zero_pad=zero_pad,
+                    group=channel,
+                ),
                 Swish(),
-                SqueezeExcite(channel, in_channel//4, excite_size) if excite_size>0
+                SqueezeExcite(channel, in_channel // 4, excite_size)
+                if excite_size > 0
                 else Identity(),
-                Conv2dBn(channel, out_channel, kernel_size=1, stride=1)
+                Conv2dBn(channel, out_channel, kernel_size=1, stride=1),
             )
 
     def forward(self, x):
         b = self.bottleneck(x)
-
         if self.is_shortcut:
-            if self.training: b = drop_connect(b, self.drop_connect_rate, True)
+            if self.training:
+                b = drop_connect(b, self.drop_connect_rate, True)
             x = b + x
         else:
             x = b
         return x
 
 
-
 # https://arogozhnikov.github.io/einops/pytorch-examples.html
-
 # actual padding used in tensorflow
-class EfficientNetB5(nn.Module):
-
+class EfficientNetB5(torch.nn.Module):
     def __init__(self, drop_connect_rate=0.4):
         super(EfficientNetB5, self).__init__()
         d = drop_connect_rate
-
-        # bottom-top
-        self.stem  = nn.Sequential(
-            Conv2dBn(3,48, kernel_size=3,stride=2,zero_pad=[0,1,0,1]),
-            Swish()
+        # Bottom-top
+        self.stem = torch.nn.Sequential(
+            Conv2dBn(3, 48, kernel_size=3, stride=2, zero_pad=[0, 1, 0, 1]), Swish()
         )
-
-        self.block1 = nn.Sequential(
-               EfficientBlock( 48,  48,  24, kernel_size=3, stride=1, zero_pad=[1,1,1,1], excite_size=128, drop_connect_rate=d*1/7),
-            * [EfficientBlock( 24,  24,  24, kernel_size=3, stride=1, zero_pad=[1,1,1,1], excite_size=128, drop_connect_rate=d*1/7) for i in range(1,3)],
+        self.block1 = torch.nn.Sequential(
+            EfficientBlock(
+                48,
+                48,
+                24,
+                kernel_size=3,
+                stride=1,
+                zero_pad=[1, 1, 1, 1],
+                excite_size=128,
+                drop_connect_rate=d * 1 / 7,
+            ),
+            *[
+                EfficientBlock(
+                    24,
+                    24,
+                    24,
+                    kernel_size=3,
+                    stride=1,
+                    zero_pad=[1, 1, 1, 1],
+                    excite_size=128,
+                    drop_connect_rate=d * 1 / 7,
+                )
+                for i in range(1, 3)
+            ],
         )
-        self.block2 = nn.Sequential(
-               EfficientBlock( 24, 144,  40, kernel_size=3, stride=2, zero_pad=[0,1,0,1], excite_size= 64, drop_connect_rate=d*2/7),
-            * [EfficientBlock( 40, 240,  40, kernel_size=3, stride=1, zero_pad=[1,1,1,1], excite_size= 64, drop_connect_rate=d*2/7) for i in range(1,5)],
+        self.block2 = torch.nn.Sequential(
+            EfficientBlock(
+                24,
+                144,
+                40,
+                kernel_size=3,
+                stride=2,
+                zero_pad=[0, 1, 0, 1],
+                excite_size=64,
+                drop_connect_rate=d * 2 / 7,
+            ),
+            *[
+                EfficientBlock(
+                    40,
+                    240,
+                    40,
+                    kernel_size=3,
+                    stride=1,
+                    zero_pad=[1, 1, 1, 1],
+                    excite_size=64,
+                    drop_connect_rate=d * 2 / 7,
+                )
+                for i in range(1, 5)
+            ],
         )
-        self.block3 = nn.Sequential(
-               EfficientBlock( 40, 240,  64, kernel_size=5, stride=2, zero_pad=[1,2,1,2], excite_size= 32, drop_connect_rate=d*3/7),
-            * [EfficientBlock( 64, 384,  64, kernel_size=5, stride=1, zero_pad=[2,2,2,2], excite_size= 32, drop_connect_rate=d*3/7) for i in range(1,5)],
+        self.block3 = torch.nn.Sequential(
+            EfficientBlock(
+                40,
+                240,
+                64,
+                kernel_size=5,
+                stride=2,
+                zero_pad=[1, 2, 1, 2],
+                excite_size=32,
+                drop_connect_rate=d * 3 / 7,
+            ),
+            *[
+                EfficientBlock(
+                    64,
+                    384,
+                    64,
+                    kernel_size=5,
+                    stride=1,
+                    zero_pad=[2, 2, 2, 2],
+                    excite_size=32,
+                    drop_connect_rate=d * 3 / 7,
+                )
+                for i in range(1, 5)
+            ],
         )
-        self.block4 = nn.Sequential(
-               EfficientBlock( 64, 384, 128, kernel_size=3, stride=2, zero_pad=[0,1,0,1], excite_size= 16, drop_connect_rate=d*4/7),
-            * [EfficientBlock(128, 768, 128, kernel_size=3, stride=1, zero_pad=[1,1,1,1], excite_size= 16, drop_connect_rate=d*4/7) for i in range(1,7)],
+        self.block4 = torch.nn.Sequential(
+            EfficientBlock(
+                64,
+                384,
+                128,
+                kernel_size=3,
+                stride=2,
+                zero_pad=[0, 1, 0, 1],
+                excite_size=16,
+                drop_connect_rate=d * 4 / 7,
+            ),
+            *[
+                EfficientBlock(
+                    128,
+                    768,
+                    128,
+                    kernel_size=3,
+                    stride=1,
+                    zero_pad=[1, 1, 1, 1],
+                    excite_size=16,
+                    drop_connect_rate=d * 4 / 7,
+                )
+                for i in range(1, 7)
+            ],
         )
-        self.block5 = nn.Sequential(
-               EfficientBlock(128, 768, 176, kernel_size=5, stride=1, zero_pad=[2,2,2,2], excite_size= 16, drop_connect_rate=d*5/7),
-            * [EfficientBlock(176,1056, 176, kernel_size=5, stride=1, zero_pad=[2,2,2,2], excite_size= 16, drop_connect_rate=d*5/7) for i in range(1,7)],
+        self.block5 = torch.nn.Sequential(
+            EfficientBlock(
+                128,
+                768,
+                176,
+                kernel_size=5,
+                stride=1,
+                zero_pad=[2, 2, 2, 2],
+                excite_size=16,
+                drop_connect_rate=d * 5 / 7,
+            ),
+            *[
+                EfficientBlock(
+                    176,
+                    1056,
+                    176,
+                    kernel_size=5,
+                    stride=1,
+                    zero_pad=[2, 2, 2, 2],
+                    excite_size=16,
+                    drop_connect_rate=d * 5 / 7,
+                )
+                for i in range(1, 7)
+            ],
         )
-        self.block6 = nn.Sequential(
-               EfficientBlock(176,1056, 304, kernel_size=5, stride=2, zero_pad=[1,2,1,2], excite_size=  8, drop_connect_rate=d*6/7),
-            * [EfficientBlock(304,1824, 304, kernel_size=5, stride=1, zero_pad=[2,2,2,2], excite_size=  8, drop_connect_rate=d*6/7) for i in range(1,9)],
+        self.block6 = torch.nn.Sequential(
+            EfficientBlock(
+                176,
+                1056,
+                304,
+                kernel_size=5,
+                stride=2,
+                zero_pad=[1, 2, 1, 2],
+                excite_size=8,
+                drop_connect_rate=d * 6 / 7,
+            ),
+            *[
+                EfficientBlock(
+                    304,
+                    1824,
+                    304,
+                    kernel_size=5,
+                    stride=1,
+                    zero_pad=[2, 2, 2, 2],
+                    excite_size=8,
+                    drop_connect_rate=d * 6 / 7,
+                )
+                for i in range(1, 9)
+            ],
         )
-        self.block7 = nn.Sequential(
-               EfficientBlock(304,1824, 512, kernel_size=3, stride=1, zero_pad=[1,1,1,1], excite_size=  8, drop_connect_rate=d*7/7),
-            * [EfficientBlock(512,3072, 512, kernel_size=3, stride=1, zero_pad=[1,1,1,1], excite_size=  8, drop_connect_rate=d*7/7) for i in range(1,3)],
+        self.block7 = torch.nn.Sequential(
+            EfficientBlock(
+                304,
+                1824,
+                512,
+                kernel_size=3,
+                stride=1,
+                zero_pad=[1, 1, 1, 1],
+                excite_size=8,
+                drop_connect_rate=d * 7 / 7,
+            ),
+            *[
+                EfficientBlock(
+                    512,
+                    3072,
+                    512,
+                    kernel_size=3,
+                    stride=1,
+                    zero_pad=[1, 1, 1, 1],
+                    excite_size=8,
+                    drop_connect_rate=d * 7 / 7,
+                )
+                for i in range(1, 3)
+            ],
         )
-
-        self.last = nn.Sequential(
-            Conv2dBn(512, 2048,kernel_size=1,stride=1),
-            Swish()
+        self.last = torch.nn.Sequential(
+            Conv2dBn(512, 2048, kernel_size=1, stride=1), Swish()
         )
-
-        self.logit = nn.Linear(2048,1000)
+        self.logit = torch.nn.Linear(2048, 1000)
 
     def forward(self, x):
         batch_size = len(x)
-
         x = self.stem(x)
         x = self.block1(x)
         x = self.block2(x)
@@ -979,101 +1136,66 @@ class EfficientNetB5(nn.Module):
         x = self.block6(x)
         x = self.block7(x)
         x = self.last(x)
-
-        x = F.adaptive_avg_pool2d(x,1).reshape(batch_size,-1)
+        x = torch.nn.functional.adaptive_avg_pool2d(x, 1).reshape(batch_size, -1)
         logit = self.logit(x)
-
         return logit
 
 
-
-
-#########################################################################
 def run_check_efficientnet():
     net = EfficientNetB5()
     load_pretrain(net, is_print=True)
-    #print(net)
-    #exit(0)
-
-
-    #---
     if 0:
-        #print(net)
-        print('')
-
-        print('*** print key *** ')
+        print("")
+        print("*** print key *** ")
         state_dict = net.state_dict()
         keys = list(state_dict.keys())
-        #keys = sorted(keys)
         for k in keys:
-            if any(s in k for s in [
-                'num_batches_tracked'
-                # '.kernel',
-                # '.gamma',
-                # '.beta',
-                # '.running_mean',
-                # '.running_var',
-            ]):
+            if any(
+                s in k
+                for s in [
+                    "num_batches_tracked"
+                    # '.kernel',
+                    # '.gamma',
+                    # '.beta',
+                    # '.running_mean',
+                    # '.running_var',
+                ]
+            ):
                 continue
-
             p = state_dict[k].data.cpu().numpy()
-            print(' \'%s\',\t%s,'%(k,tuple(p.shape)))
-        print('')
+            print(" '%s',\t%s," % (k, tuple(p.shape)))
+        print("")
         exit(0)
-
-    #---
     if 1:
-        # IMAGE_RGB_MEAN = [0.485, 0.456, 0.406]
-        # IMAGE_RGB_STD  = [0.229, 0.224, 0.225]
-
         net = net.cuda().eval()
-
-        image_dir ='/root/share/data/imagenet/dummy/256x256'
+        image_dir = "/root/share/data/imagenet/dummy/256x256"
         for f in [
-            'great_white_shark','screwdriver','ostrich','blad_eagle','english_foxhound','goldfish',
+            "great_white_shark",
+            "screwdriver",
+            "ostrich",
+            "blad_eagle",
+            "english_foxhound",
+            "goldfish",
         ]:
-            image_file = image_dir +'/%s.jpg'%f
+            image_file = image_dir + "/%s.jpg" % f
             image = cv2.imread(image_file, cv2.IMREAD_COLOR)
-            #image = cv2.resize(image,dsize=(224,224))
-            #image = image[16:16+224,16:16+224]
-
-            image = image[:,:,::-1]
-            image = (image.astype(np.float32)/255 -IMAGE_RGB_MEAN)/IMAGE_RGB_STD
-            input = image.transpose(2,0,1)
-
+            image = image[:, :, ::-1]
+            image = (image.astype(numpy.float32) / 255 - IMAGE_RGB_MEAN) / IMAGE_RGB_STD
+            input = image.transpose(2, 0, 1)
             input = torch.from_numpy(input).float().cuda().unsqueeze(0)
-
             logit = net(input)
-            proability = F.softmax(logit,-1)
-
+            proability = torch.nn.functional.softmax(logit, -1)
             probability = proability.data.cpu().numpy().reshape(-1)
-            argsort = np.argsort(-probability)
-
+            argsort = numpy.argsort(-probability)
             print(f, image.shape)
             print(probability[:5])
             for t in range(5):
-                print(t, '%5d'%argsort[t], probability[argsort[t]])
-            print('')
-
+                print(t, "%5d" % argsort[t], probability[argsort[t]])
+            print("")
             pass
 
 
-'''
-
-[8.7754931e-03 8.2669204e-01 8.3855812e-05 5.7508185e-04 2.7134272e-04]
-0 1 0.82669204
-1 392 0.036001623
-2 0 0.008775493
-3 395 0.0059498292
-4 973 0.005688266
-
-'''
-
-# main #################################################################
-if __name__ == '__main__':
-    print( '%s: calling main function ... ' % os.path.basename(__file__))
-
+if __name__ == "__main__":
+    print("%s: calling main function ... " % os.path.basename(__file__))
     run_check_efficientnet()
-
-
-    print('\nsucess!')
+    print("\n Success!")
