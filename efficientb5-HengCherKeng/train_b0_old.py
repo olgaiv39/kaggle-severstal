@@ -1,11 +1,45 @@
 import os
-import logging
-import torch
-import datetime
 import numpy
-import timeit
-from . import model
-from .dataset import samplers, dataset, augmentations
+import torch
+import cv2
+from timeit import default_timer as timer
+from .dataset import *
+from .model import *
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+
+# TODO: brush up augmentation parameters
+# TODO: WTF is infor?
+def train_augment(image, label, mask, infor):
+    random_augment_flag = numpy.random.choice(3)  # TODO: Why is this random?
+    if random_augment_flag == 0:
+        pass
+    elif random_augment_flag == 1:
+        image, mask = do_random_crop_rescale(image, mask, 1600 - (256 - 180), 180)
+    elif random_augment_flag == 2:
+        image, mask = do_random_crop_rotate_rescale(
+            image, mask, 1600 - (256 - 224), 224
+        )
+    image, mask = do_random_crop(image, mask, 400, 256)
+    if numpy.random.rand() > 0.25:
+        image, mask = do_random_cutout(image, mask)
+    if numpy.random.rand() > 0.5:
+        image, mask = do_flip_lr(image, mask)
+    if numpy.random.rand() > 0.5:
+        image, mask = do_flip_ud(image, mask)
+    if numpy.random.rand() > 0.5:
+        image = do_random_log_contast(image, gain=[0.70, 1.50])
+    u = numpy.random.choice(3)
+    if u == 0:
+        pass
+    if u == 1:
+        image = do_random_noise(image, noise=8)
+    if u == 2:
+        image = do_random_salt_pepper_noise(image, noise=0.0001)
+    # if   u==3:
+    #     image = do_random_salt_pepper_line(image)
+    return image, label, mask, infor
 
 
 def do_valid(net, valid_loader, out_dir=None, debug_flag=None):
@@ -23,10 +57,10 @@ def do_valid(net, valid_loader, out_dir=None, debug_flag=None):
         truth_attention = truth_attention.cuda()
         with torch.no_grad():
             logit_mask = torch.nn.parallel.data_parallel(net, input)
-            loss = model.criterion_mask(logit_mask, truth_mask)
-            probability_label = model.logit_mask_to_probability_label(logit_mask)
-            tn, tp, num_neg, num_pos = model.metric_label(probability_label, truth_label)
-            dn, dp, num_neg, num_pos = model.metric_mask(logit_mask, truth_mask)
+            loss = criterion_mask(logit_mask, truth_mask)
+            probability_label = logit_mask_to_probability_label(logit_mask)
+            tn, tp, num_neg, num_pos = metric_label(probability_label, truth_label)
+            dn, dp, num_neg, num_pos = metric_mask(logit_mask, truth_mask)
         l = numpy.array([loss.item() * batch_size, *tn, *tp, *dn, *dp])
         n = numpy.array([batch_size, *num_neg, *num_pos, *num_neg, *num_pos])
         valid_loss += l
@@ -40,43 +74,50 @@ def do_valid(net, valid_loader, out_dir=None, debug_flag=None):
     return valid_loss
 
 
-def train_b0_network(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth", torch_seed=0, iter_accum=1, batch_size=10, init_lr=0.001):
-    # Fix PyTorch seed
-    torch.manual_seed(torch_seed)
+def run_train(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth"):
+    sampler = FiveBalanceClassSampler  # RandomSampler #FiveBalanceClassSampler
+    loss_weight = None  # [5,10,2,5]
+    # TODO: Figure out how to implement NullScheduler, or find the implementation
+    scheduler = NullScheduler(lr=0.001)
+    iter_accum = 1
+    batch_size = 10  # 8
     # Setup
     for f in ["checkpoint", "train", "valid", "backup"]:
         os.makedirs(out_dir + "/" + f, exist_ok=True)
-    log = logging.Logger()
+    # TODO: Figure out how to implement backup_project_as_zip, Logger,
+    # TODO: caps-locked parameters, or find the implementation
+    backup_project_as_zip(
+        PROJECT_PATH, out_dir + "/backup/code.train.%s.zip" % IDENTIFIER
+    )
+    log = Logger()
     log.open(out_dir + "/log.train.txt", mode="a")
-    log.write("\n--- [START %s] %s\n\n" % (datetime.datetime.now(), "-" * 64))
-    log.write("\tPyTorch seed = %u\n" % torch_seed)
+    log.write("\n--- [START %s] %s\n\n" % (IDENTIFIER, "-" * 64))
+    log.write("\t%s\n" % COMMON_STRING)
+    log.write("\n")
+    log.write("\tSEED         = %u\n" % SEED)
+    log.write("\tPROJECT_PATH = %s\n" % PROJECT_PATH)
     log.write("\t__file__     = %s\n" % __file__)
     log.write("\tout_dir      = %s\n" % out_dir)
     log.write("\n")
     # Dataset
     log.write("** dataset setting **\n")
-    train_dataset = dataset.SteelDataset(
+    train_dataset = SteelDataset(
         mode="train",
         csv=["train.csv"],
         split=["train_b0_11568.npy"],
-        augment=augmentations.train_augment,
+        augment=train_augment,
     )
-    # We have several samplers to use, located in dataset/samplers.py
-    sampler = samplers.FiveBalanceClassSampler(train_dataset)
     train_loader = torch.DataLoader(
         train_dataset,
-        sampler=sampler,
+        sampler=sampler(train_dataset),
         batch_size=batch_size,
         drop_last=True,
         num_workers=4,
         pin_memory=True,
-        collate_fn=augmentations.null_collate,
+        collate_fn=null_collate,
     )
-    valid_dataset = dataset.SteelDataset(
-        mode="train",
-        csv=["train.csv"],
-        split=["valid_b0_1000.npy"],
-        augment=None
+    valid_dataset = SteelDataset(
+        mode="train", csv=["train.csv"], split=["valid_b0_1000.npy"], augment=None
     )
     valid_loader = torch.utils.data.DataLoader(
         valid_dataset,
@@ -85,7 +126,7 @@ def train_b0_network(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth"
         drop_last=False,
         num_workers=4,
         pin_memory=True,
-        collate_fn=augmentations.null_collate,
+        collate_fn=null_collate,
     )
     assert len(train_dataset) >= batch_size
     log.write("batch_size = %d\n" % batch_size)
@@ -94,32 +135,40 @@ def train_b0_network(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth"
     log.write("\n")
     # Net
     log.write("** net setting **\n")
-    net = model.Net().cuda()
+    net = Net().cuda()
     log.write("\tinitial_checkpoint_fn = %s\n" % initial_checkpoint_fn)
     if initial_checkpoint_fn is not None:
         state_dict = torch.load(
             initial_checkpoint_fn, map_location=lambda storage, loc: storage
         )
-        net.load_state_dict(state_dict, strict=False)
+        # for k in list(state_dict.keys()):
+        #     if any(s in k for s in ['g_block1',]): state_dict.pop(k, None)
+        # net.load_state_dict(state_dict,strict=False)
+        net.load_state_dict(state_dict, strict=False)  # True
     else:
         net.load_pretrain(is_print=False)
     log.write("%s\n" % (type(net)))
+    log.write("loss_weight=%s\n" % (str(loss_weight)))
     log.write("sampler=%s\n" % (str(sampler)))
     log.write("\n")
+    # Optimiser
+    # if 0: ##freeze
+    #     for p in net.encoder1.parameters(): p.requires_grad = False
+    #     pass
+    # net.set_mode('train',is_freeze_bn=True)
+    # optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()),lr=scheduler(0))
+    # optimizer = torch.optim.RMSprop(net.parameters(), lr =0.0005, alpha = 0.95)
     optimizer = torch.optim.SGD(
         filter(lambda p: p.requires_grad, net.parameters()),
-        lr=init_lr,
+        lr=scheduler(0),
         momentum=0.9,
         weight_decay=0.0001,
-    )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer
     )
     num_iters = 3000 * 1000
     iter_smooth = 50
     iter_log = 200
     iter_valid = 200
-    iter_save = [0, num_iters - 1] + list(range(0, num_iters, 1000))
+    iter_save = [0, num_iters - 1] + list(range(0, num_iters, 1000))  # 1*1000
     start_iter = 0
     start_epoch = 0
     rate = 0
@@ -131,9 +180,10 @@ def train_b0_network(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth"
             checkpoint = torch.load(initial_optimizer)
             start_iter = checkpoint["iter"]
             start_epoch = checkpoint["epoch"]
+            # optimizer.load_state_dict(checkpoint['optimizer'])
         pass
-    log.write("optimizer\n  %s\n" % optimizer)
-    log.write("scheduler\n  %s\n" % scheduler)
+    log.write("optimizer\n  %s\n" % (optimizer))
+    log.write("scheduler\n  %s\n" % (scheduler))
     log.write("\n")
     # Training starts here!
     log.write("** Training starts here! **\n")
@@ -148,12 +198,13 @@ def train_b0_network(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth"
     log.write(
         "--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n"
     )
+    # 0.00000 135.0*  65.1 |   nan  [1.00 1.00 1.00 1.00 : 0.00 0.00 0.00 0.00]  [1.00 1.00 1.00 1.00 : 0.00 0.00 0.00 0.00] | 0.000  [0.00 : 0.00 0.00 0.00 0.00] |  0 hr 00 min
     valid_loss = numpy.zeros(17, numpy.float32)
     train_loss = numpy.zeros(6, numpy.float32)
     batch_loss = numpy.zeros_like(valid_loss)
     iter = 0
     i = 0
-    start = timeit.default_timer()
+    start = timer()
     while iter < num_iters:
         sum_train_loss = numpy.zeros_like(train_loss)
         sum_train = numpy.zeros_like(train_loss)
@@ -180,44 +231,48 @@ def train_b0_network(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth"
                         epoch,
                         *valid_loss,
                         *train_loss,
-                        # TODO: Replace this with cleaner code
-                        str((timeit.default_timer() - start) // 60) + str(timeit.default_timer() - 60 * (timeit.default_timer() // 60)),
+                        time_to_str((timer() - start), "min"),
                     )
                 )
                 log.write("\n")
+            # if 0:
             if iter in iter_save:
                 torch.save(
                     {
+                        # 'optimizer': optimizer.state_dict(),
                         "iter": iter,
                         "epoch": epoch,
                     },
-                    out_dir + "/checkpoint/%08d_optimizer.pth" % iter,
+                    out_dir + "/checkpoint/%08d_optimizer.pth" % (iter),
                 )
                 if iter != start_iter:
                     torch.save(
                         net.state_dict(),
-                        out_dir + "/checkpoint/%08d_model.pth" % iter,
+                        out_dir + "/checkpoint/%08d_model.pth" % (iter),
                     )
                     pass
-            # Learning rate scheduler
+            # learning rate scheduler -------------
             lr = scheduler(iter)
             if lr < 0:
                 break
+            adjust_learning_rate(optimizer, lr)
+            rate = get_learning_rate(optimizer)
+            # one iteration update  -------------
+            # net.set_mode('train',is_freeze_bn=True)
             net.train()
             input = input.cuda()
             truth_label = truth_label.cuda()
             truth_mask = truth_mask.cuda()
             truth_attention = truth_attention.cuda()
             logit_mask = torch.nn.parallel.data_parallel(net, input)
-            loss = model.criterion_mask(logit_mask, truth_mask)
-            probability_label = model.logit_mask_to_probability_label(logit_mask)
-            tn, tp, num_neg, num_pos = model.metric_label(probability_label, truth_label)
+            loss = criterion_mask(logit_mask, truth_mask)
+            probability_label = logit_mask_to_probability_label(logit_mask)
+            tn, tp, num_neg, num_pos = metric_label(probability_label, truth_label)
             (loss / iter_accum).backward()
             if (iter % iter_accum) == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-                scheduler.step()
-            # Print statistics
+            # print statistics  --------
             l = numpy.array([loss.item() * batch_size, tn.sum(), *tp])
             n = numpy.array([batch_size, num_neg.sum(), *num_pos])
             batch_loss = l / n
@@ -238,7 +293,7 @@ def train_b0_network(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth"
                     epoch,
                     *valid_loss,
                     *batch_loss,
-                    str((timeit.default_timer() - start) // 60) + str(timeit.default_timer() - 60 * (timeit.default_timer() // 60)),
+                    time_to_str((timer() - start), "min"),
                 ),
                 end="",
                 flush=True,
@@ -251,4 +306,4 @@ def train_b0_network(out_dir="/out", initial_checkpoint_fn="/out/checkpoint.pth"
 
 if __name__ == "__main__":
     print("%s: calling main function ... " % os.path.basename(__file__))
-    train_b0_network()
+    run_train()

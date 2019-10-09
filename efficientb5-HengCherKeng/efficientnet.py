@@ -1,4 +1,5 @@
 import os
+import torch
 from lib.net.sync_bn.nn import BatchNorm2dSync as SynchronizedBatchNorm2d
 
 BatchNorm2d = SynchronizedBatchNorm2d  # Or we can use torch.nn.BatchNorm2d
@@ -1144,55 +1145,32 @@ class EfficientNetB5(torch.nn.Module):
 def run_check_efficientnet():
     net = EfficientNetB5()
     load_pretrain(net, is_print=True)
-    if 0:
+    net = net.cuda().eval()
+    image_dir = "/root/share/data/imagenet/dummy/256x256"
+    for f in [
+        "great_white_shark",
+        "screwdriver",
+        "ostrich",
+        "blad_eagle",
+        "english_foxhound",
+        "goldfish",
+    ]:
+        image_file = image_dir + "/%s.jpg" % f
+        image = cv2.imread(image_file, cv2.IMREAD_COLOR)
+        image = image[:, :, ::-1]
+        image = (image.astype(numpy.float32) / 255 - IMAGE_RGB_MEAN) / IMAGE_RGB_STD
+        input = image.transpose(2, 0, 1)
+        input = torch.from_numpy(input).float().cuda().unsqueeze(0)
+        logit = net(input)
+        proability = torch.nn.functional.softmax(logit, -1)
+        probability = proability.data.cpu().numpy().reshape(-1)
+        argsort = numpy.argsort(-probability)
+        print(f, image.shape)
+        print(probability[:5])
+        for t in range(5):
+            print(t, "%5d" % argsort[t], probability[argsort[t]])
         print("")
-        print("*** print key *** ")
-        state_dict = net.state_dict()
-        keys = list(state_dict.keys())
-        for k in keys:
-            if any(
-                s in k
-                for s in [
-                    "num_batches_tracked"
-                    # '.kernel',
-                    # '.gamma',
-                    # '.beta',
-                    # '.running_mean',
-                    # '.running_var',
-                ]
-            ):
-                continue
-            p = state_dict[k].data.cpu().numpy()
-            print(" '%s',\t%s," % (k, tuple(p.shape)))
-        print("")
-        exit(0)
-    if 1:
-        net = net.cuda().eval()
-        image_dir = "/root/share/data/imagenet/dummy/256x256"
-        for f in [
-            "great_white_shark",
-            "screwdriver",
-            "ostrich",
-            "blad_eagle",
-            "english_foxhound",
-            "goldfish",
-        ]:
-            image_file = image_dir + "/%s.jpg" % f
-            image = cv2.imread(image_file, cv2.IMREAD_COLOR)
-            image = image[:, :, ::-1]
-            image = (image.astype(numpy.float32) / 255 - IMAGE_RGB_MEAN) / IMAGE_RGB_STD
-            input = image.transpose(2, 0, 1)
-            input = torch.from_numpy(input).float().cuda().unsqueeze(0)
-            logit = net(input)
-            proability = torch.nn.functional.softmax(logit, -1)
-            probability = proability.data.cpu().numpy().reshape(-1)
-            argsort = numpy.argsort(-probability)
-            print(f, image.shape)
-            print(probability[:5])
-            for t in range(5):
-                print(t, "%5d" % argsort[t], probability[argsort[t]])
-            print("")
-            pass
+        pass
 
 
 if __name__ == "__main__":

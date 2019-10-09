@@ -1,56 +1,51 @@
-from common import *
-from etc import *
-
-
+import torch
+import numpy
+import pandas
+import cv2
+import os
+from .etc import *
 DATA_DIR = "/root/share/project/kaggle/2019/steel/data"
 
 
-class SteelDataset(Dataset):
+class SteelDataset(torch.utils.data.Dataset):
     def __init__(self, split, csv, mode, augment=None):
-
         self.split = split
         self.csv = csv
         self.mode = mode
         self.augment = augment
-
         self.uid = list(
-            np.concatenate(
-                [np.load(DATA_DIR + "/split/%s" % f, allow_pickle=True) for f in split]
+            numpy.concatenate(
+                [numpy.load(DATA_DIR + "/split/%s" % f, allow_pickle=True) for f in split]
             )
         )
-        df = pd.concat([pd.read_csv(DATA_DIR + "/%s" % f).fillna("") for f in csv])
-
-        df["Class"] = df["ImageId_ClassId"].str[-1].astype(np.int32)
-        df["Label"] = (df["EncodedPixels"] != "").astype(np.int32)
-        df = df_loc_by_list(
-            df,
+        dataframe = pandas.concat([pandas.read_csv(DATA_DIR + "/%s" % f).fillna("") for f in csv])
+        dataframe["Class"] = dataframe["ImageId_ClassId"].str[-1].astype(numpy.int32)
+        dataframe["Label"] = (dataframe["EncodedPixels"] != "").astype(numpy.int32)
+        dataframe = dataframe_loc_by_list(
+            dataframe,
             "ImageId_ClassId",
             [u.split("/")[-1] + "_%d" % c for u in self.uid for c in [1, 2, 3, 4]],
         )
-        self.df = df
-        self.num_image = len(df) // 4
+        self.dataframe = dataframe
+        self.num_image = len(dataframe) // 4
 
     def __str__(self):
-        num1 = (self.df["Class"] == 1).sum()
-        num2 = (self.df["Class"] == 2).sum()
-        num3 = (self.df["Class"] == 3).sum()
-        num4 = (self.df["Class"] == 4).sum()
-        pos1 = ((self.df["Class"] == 1) & (self.df["Label"] == 1)).sum()
-        pos2 = ((self.df["Class"] == 2) & (self.df["Label"] == 1)).sum()
-        pos3 = ((self.df["Class"] == 3) & (self.df["Label"] == 1)).sum()
-        pos4 = ((self.df["Class"] == 4) & (self.df["Label"] == 1)).sum()
+        num1 = (self.dataframe["Class"] == 1).sum()
+        num2 = (self.dataframe["Class"] == 2).sum()
+        num3 = (self.dataframe["Class"] == 3).sum()
+        num4 = (self.dataframe["Class"] == 4).sum()
+        pos1 = ((self.dataframe["Class"] == 1) & (self.dataframe["Label"] == 1)).sum()
+        pos2 = ((self.dataframe["Class"] == 2) & (self.dataframe["Label"] == 1)).sum()
+        pos3 = ((self.dataframe["Class"] == 3) & (self.dataframe["Label"] == 1)).sum()
+        pos4 = ((self.dataframe["Class"] == 4) & (self.dataframe["Label"] == 1)).sum()
         neg1 = num1 - pos1
         neg2 = num2 - pos2
         neg3 = num3 - pos3
         neg4 = num4 - pos4
-
         length = len(self)
         num = len(self)
-        pos = (self.df["Label"] == 1).sum()
+        pos = (self.dataframe["Label"] == 1).sum()
         neg = num - pos
-
-        # ---
-
         string = ""
         string += "\tmode    = %s\n" % self.mode
         string += "\tsplit   = %s\n" % self.split
@@ -92,17 +87,17 @@ class SteelDataset(Dataset):
         folder, image_id = self.uid[index].split("/")
 
         rle = [
-            self.df.loc[
-                self.df["ImageId_ClassId"] == image_id + "_1", "EncodedPixels"
+            self.dataframe.loc[
+                self.dataframe["ImageId_ClassId"] == image_id + "_1", "EncodedPixels"
             ].values[0],
-            self.df.loc[
-                self.df["ImageId_ClassId"] == image_id + "_2", "EncodedPixels"
+            self.dataframe.loc[
+                self.dataframe["ImageId_ClassId"] == image_id + "_2", "EncodedPixels"
             ].values[0],
-            self.df.loc[
-                self.df["ImageId_ClassId"] == image_id + "_3", "EncodedPixels"
+            self.dataframe.loc[
+                self.dataframe["ImageId_ClassId"] == image_id + "_3", "EncodedPixels"
             ].values[0],
-            self.df.loc[
-                self.df["ImageId_ClassId"] == image_id + "_4", "EncodedPixels"
+            self.dataframe.loc[
+                self.dataframe["ImageId_ClassId"] == image_id + "_4", "EncodedPixels"
             ].values[0],
         ]
         image = cv2.imread(DATA_DIR + "/%s/%s" % (folder, image_id), cv2.IMREAD_COLOR)
@@ -155,7 +150,7 @@ class FiveBalanceClassSampler(Sampler):
     def __init__(self, dataset):
         self.dataset = dataset
 
-        label = self.dataset.df["Label"].values
+        label = self.dataset.dataframe["Label"].values
         label = label.reshape(-1, 4)
         label = np.hstack([label.sum(1, keepdims=True) == 0, label]).T
 
@@ -166,7 +161,7 @@ class FiveBalanceClassSampler(Sampler):
         self.pos4_index = np.where(label[4])[0]
 
         # 5x
-        self.num_image = len(self.dataset.df) // 4
+        self.num_image = len(self.dataset.dataframe) // 4
         self.length = self.num_image * 5
 
     def __iter__(self):
@@ -744,18 +739,11 @@ def run_etc0():
         select = select * m
         select = cv2.GaussianBlur(select, (41, 41), 0)
 
-        image_show("image", image)
-        image_show("select", select)
+        cv2.image_show("image", image)
+        cv2.image_show("select", select)
         cv2.waitKey(0)
 
 
-# main #################################################################
 if __name__ == "__main__":
     print("%s: calling main function ... " % os.path.basename(__file__))
-
-    # run_check_train_dataset()
-    # run_check_data_loader()
     run_check_augment()
-    # run_check_batch_augment()
-
-    # run_etc0()

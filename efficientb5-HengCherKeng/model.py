@@ -73,7 +73,7 @@ block5 torch.Size([10, 176, 16, 16])
 block6 torch.Size([10, 304, 8, 8])
 block7 torch.Size([10, 512, 8, 8])
 last   torch.Size([10, 2048, 8, 8])
-sucess!
+Success!
 """
 
 
