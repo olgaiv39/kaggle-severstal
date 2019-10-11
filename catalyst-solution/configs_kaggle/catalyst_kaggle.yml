@@ -1,0 +1,50 @@
+model_params:
+  model: SegmentationModelPytorch
+  num_classes: 4
+  arch: Unet
+  encoder: resnet34
+
+args:
+  expdir: "catalyst_segment_kaggle"
+  logdir: "log"
+
+stages:
+
+  data_params:
+    num_workers: 2
+    batch_size: 36
+    per_gpu_scaling: True
+    img_folder: 'data/input/train_images/'
+    mask_folder: 'data/train_masks/'
+    fold_csv: 'data/masks.csv'
+    fold_number: 0
+
+  state_params:
+    main_metric: dice
+    minimize_metric: False
+
+  criterion_params:
+    criterion: BCEDiceLoss
+
+  callbacks_params:
+    loss:
+      callback: CriterionCallback
+    optimizer:
+      callback: OptimizerCallback
+    saver:
+      callback: CheckpointCallback
+    dice:
+      callback: DiceCallback
+
+  stage1:
+    state_params:
+      num_epochs: 360
+
+    optimizer_params:
+      optimizer: Adam
+      lr: 0.001
+      layerwise_params:
+        model.encoder*:
+          lr: 0.00001
+        model.decoder*:
+          lr: 0.001
