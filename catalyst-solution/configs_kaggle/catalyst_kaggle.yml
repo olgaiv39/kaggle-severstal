@@ -1,8 +1,8 @@
 model_params:
   model: SegmentationModelPytorch
   num_classes: 4
-  arch: Unet
-  encoder: resnet34
+  arch: FPN
+  encoder: efficient-b0
 
 args:
   expdir: "catalyst_segment_kaggle"

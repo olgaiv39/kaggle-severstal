@@ -16,13 +16,3 @@ executors:
       config: configs_kaggle/catalyst_kaggle.yml
     depends: masks
     trace: trace.pth
-    grid:
-      - - encoder: resnet34
-        - encoder: se_resnext50_32x4d
-          batch_size: 16
-        - model_params:
-            model: MobileUnet
-            input_size: 256
-            pretrained: True
-            num_classes: 4
-            layerwise_params: {}
