@@ -10,3 +10,5 @@ https://www.kaggle.com/c/severstal-steel-defect-detection
 5. Make sure to have all read\write permissions for data.
 6. To apply config to server, run ```mlcomp dag *path to dir*/kaggle.yml```
 7. Final model is a ```trace.pth``` file in ```~/mlcomp/tasks/*number of the task*/trace.pth```. It is made in the end of task execution so plan your training time carefully.
+
+Note: Make sure to check avalibility of the model defined by catalyst config with\without grid params!
