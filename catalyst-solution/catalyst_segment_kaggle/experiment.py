@@ -12,7 +12,43 @@ class Experiment(ConfigExperiment):
     @staticmethod
     def prepare_train_transforms(aug=None):
         transforms = [
-            A.HorizontalFlip()
+        
+         A.HorizontalFlip(p=0.6),
+
+        A.ShiftScaleRotate(scale_limit=0.5, rotate_limit=0, shift_limit=0.1, p=1, border_mode=0),
+
+        #A.PadIfNeeded(min_height=960, min_width=960, always_apply=False, border_mode=0),
+        A.RandomCrop(height=256, width=256, always_apply=False),
+
+        A.IAAAdditiveGaussianNoise(p=0.3),
+        A.IAAPerspective(p=0.4),
+
+        A.OneOf(
+            [
+            A.CLAHE(p=1),
+            A.RandomBrightness(p=1),
+            A.RandomGamma(p=1),
+            ],
+            p=0.9,
+        ),
+
+        A.OneOf(
+            [
+            A.IAASharpen(p=1),
+            A.Blur(blur_limit=3, p=1),
+            A.MotionBlur(blur_limit=3, p=1),
+            ],
+            p=0.9,
+        ),
+
+        A.OneOf(
+            [
+                A.RandomContrast(p=1),
+                A.HueSaturationValue(p=1),
+            ],
+            p=0.8,
+        )
+            
         ]
 
         if aug:
