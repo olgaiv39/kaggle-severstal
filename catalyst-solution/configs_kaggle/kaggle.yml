@@ -1,0 +1,18 @@
+info:
+  name: kaggle_kernel
+  project: severstal
+  layout: segment
+  expdir: ../
+executors:
+  preprocess:
+    type: preprocess
+  masks:
+    type: masks
+    depends: preprocess
+  train:
+    type: catalyst
+    gpu: 1
+    args:
+      config: configs_kaggle/catalyst_kaggle.yml
+    depends: masks
+    trace: trace.pth
